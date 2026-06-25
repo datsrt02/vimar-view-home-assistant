@@ -44,7 +44,7 @@ class VimarViewConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None and self._auth is not None:
             try:
-                token = await self._auth.exchange_password(
+                token = await self._auth.exchange_credentials(
                     user_input[CONF_USERNAME],
                     user_input[CONF_PASSWORD],
                 )

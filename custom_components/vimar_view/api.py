@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+from html.parser import HTMLParser
 import json
 import logging
 import secrets
@@ -29,6 +30,58 @@ from .models import JsonObject, VimarDataEntity, VimarDevice, VimarPlant, VimarR
 _LOGGER = logging.getLogger(__name__)
 
 TokenUpdateCallback = Callable[[JsonObject], Awaitable[None] | None]
+
+
+class _AuthNavigationResult:
+    """Result from manually navigating the auth pages."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        callback_url: str | None = None,
+        text: str | None = None,
+    ) -> None:
+        self.url = url
+        self.callback_url = callback_url
+        self.text = text
+
+
+class _LoginForm:
+    """HTML login form details."""
+
+    def __init__(self, action: str, inputs: dict[str, str]) -> None:
+        self.action = action
+        self.inputs = inputs
+
+
+class _LoginFormParser(HTMLParser):
+    """Extract forms from Keycloak login HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.forms: list[dict[str, Any]] = []
+        self._current_form: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {key.lower(): value or "" for key, value in attrs}
+        if tag.lower() == "form":
+            self._current_form = {
+                "id": attr_map.get("id", ""),
+                "action": attr_map.get("action", ""),
+                "inputs": {},
+            }
+            return
+        if tag.lower() != "input" or self._current_form is None:
+            return
+        name = attr_map.get("name")
+        if name:
+            self._current_form["inputs"][name] = attr_map.get("value", "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "form" and self._current_form is not None:
+            self.forms.append(self._current_form)
+            self._current_form = None
 
 
 class VimarViewError(Exception):
@@ -127,6 +180,15 @@ class VimarAuthSession:
         token["created_at"] = int(time.time())
         return token
 
+    async def exchange_credentials(self, username: str, password: str) -> JsonObject:
+        """Exchange account credentials using direct grant or the web login form."""
+        username = username.strip()
+        try:
+            return await self.exchange_password(username, password)
+        except (VimarViewApiError, VimarViewAuthError):
+            _LOGGER.debug("Vimar direct password grant failed, trying browser form flow")
+            return await self.exchange_login_form(username, password)
+
     async def exchange_password(self, username: str, password: str) -> JsonObject:
         """Exchange account credentials for tokens."""
         token_endpoint = self.discovery["token_endpoint"]
@@ -140,6 +202,74 @@ class VimarAuthSession:
         token = await request_json(self.session, "POST", token_endpoint, data=data, auth=False)
         token["created_at"] = int(time.time())
         return token
+
+    async def exchange_login_form(self, username: str, password: str) -> JsonObject:
+        """Submit the Vimar web login form and exchange the resulting auth code."""
+        last_error: VimarViewError | None = None
+        for auth_url in self.authorization_urls.values():
+            try:
+                result = await self._request_without_redirects("GET", auth_url)
+                if result.callback_url is not None:
+                    return await self.exchange_callback_url(result.callback_url)
+                if result.text is None:
+                    raise VimarViewAuthError("Vimar login page did not return a form")
+
+                login_form = _extract_login_form(result.text)
+                form_action = urljoin(result.url, login_form.action)
+                form_data = dict(login_form.inputs)
+                form_data["username"] = username
+                form_data["password"] = password
+
+                result = await self._request_without_redirects("POST", form_action, data=form_data)
+                if result.callback_url is None:
+                    raise VimarViewAuthError("Vimar login did not return an authorization code")
+                return await self.exchange_callback_url(result.callback_url)
+            except VimarViewError as err:
+                last_error = err
+                _LOGGER.debug("Vimar web login form flow failed: %s", err)
+        raise last_error or VimarViewAuthError("Vimar login did not return an authorization code")
+
+    async def _request_without_redirects(
+        self,
+        method: str,
+        url: str,
+        data: Any | None = None,
+    ) -> "_AuthNavigationResult":
+        """Navigate auth pages while preserving custom-scheme redirects."""
+        current_method = method
+        current_url = url
+        current_data = data
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": APP_USER_AGENT,
+        }
+        try:
+            for _ in range(10):
+                async with self.session.request(
+                    current_method,
+                    current_url,
+                    headers=headers,
+                    data=current_data,
+                    allow_redirects=False,
+                    timeout=30,
+                ) as response:
+                    location = response.headers.get("Location")
+                    if location and response.status in (301, 302, 303, 307, 308):
+                        if location.startswith("com.prova.app:"):
+                            return _AuthNavigationResult(url=location, callback_url=location)
+                        current_url = urljoin(str(response.url), location)
+                        if response.status in (301, 302, 303):
+                            current_method = "GET"
+                            current_data = None
+                        continue
+                    if response.status >= 400:
+                        text = await response.text()
+                        raise VimarViewAuthError(text or response.reason)
+                    text = await response.text()
+                    return _AuthNavigationResult(url=str(response.url), text=text)
+        except ClientError as err:
+            raise VimarViewConnectionError(str(err)) from err
+        raise VimarViewConnectionError("Too many Vimar login redirects")
 
 
 class VimarViewApi:
@@ -514,6 +644,28 @@ def _redirect_uri_from_callback(parsed) -> str | None:
     if callback_uri in APP_REDIRECT_URIS:
         return callback_uri
     return None
+
+
+def _extract_login_form(html: str) -> _LoginForm:
+    parser = _LoginFormParser()
+    parser.feed(html)
+    if parser._current_form is not None:
+        parser.forms.append(parser._current_form)
+        parser._current_form = None
+
+    for form in parser.forms:
+        action = str(form.get("action") or "")
+        inputs = form.get("inputs") or {}
+        form_id = str(form.get("id") or "")
+        if form_id == "kc-form-login" or "login-actions/authenticate" in action:
+            return _LoginForm(action, dict(inputs))
+
+    for form in parser.forms:
+        inputs = form.get("inputs") or {}
+        if "username" in inputs or "password" in inputs:
+            return _LoginForm(str(form.get("action") or ""), dict(inputs))
+
+    raise VimarViewAuthError("Could not find Vimar login form")
 
 
 def _first(values: list[str] | None) -> str | None:
