@@ -127,6 +127,20 @@ class VimarAuthSession:
         token["created_at"] = int(time.time())
         return token
 
+    async def exchange_password(self, username: str, password: str) -> JsonObject:
+        """Exchange account credentials for tokens."""
+        token_endpoint = self.discovery["token_endpoint"]
+        data = {
+            "grant_type": "password",
+            "client_id": APP_CLIENT_ID,
+            "username": username,
+            "password": password,
+            "scope": APP_SCOPE,
+        }
+        token = await request_json(self.session, "POST", token_endpoint, data=data, auth=False)
+        token["created_at"] = int(time.time())
+        return token
+
 
 class VimarViewApi:
     """Vimar VIEW cloud client."""

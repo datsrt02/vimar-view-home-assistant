@@ -33,6 +33,10 @@ Restart Home Assistant, then add the integration from Settings > Devices & servi
 
 ## Login flow
 
+The integration signs in with the same Vimar VIEW account used by the mobile app. It uses the Vimar public mobile client (`mobile-user-view2`) to request tokens directly from the Vimar OpenID token endpoint. The account password is used only for the token request and is not stored in Home Assistant.
+
+## Manual OAuth fallback
+
 The Android manifest registers this redirect URI:
 
 `com.prova.app:/oauth2redirect/example-provider`
