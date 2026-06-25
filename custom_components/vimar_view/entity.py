@@ -59,6 +59,10 @@ class VimarDataPointEntity(VimarCoordinatorEntity):
             "device_id": entity.device_id,
             "category": entity.category,
             "path": entity.path,
+            "idsf": entity.features.get("idsf"),
+            "sftype": entity.features.get("sftype"),
+            "sstype": entity.features.get("sstype"),
+            "room": entity.features.get("room"),
         }
 
 

@@ -2,26 +2,31 @@
 
 This custom component is based on the reverse-engineered Vimar VIEW Android app.
 
-## What works in this first build
+## What works
 
 - Links a Vimar VIEW account through the same OpenID/AppAuth flow used by the Android app.
 - Stores and refreshes bearer tokens through Home Assistant config entries.
-- Syncs plants, associations, cloud devices, extracted datapoints, and routines.
+- Syncs plants, associations, cloud devices, routines, and IPConnector system functions from each gateway.
 - Creates:
   - `sensor` entities for numeric/string datapoints
   - `binary_sensor` entities for boolean/status datapoints
+  - `light` entities for Vimar/Philips HUE light system functions
+  - `cover` entities for shutters, curtains, blinds, and slats
+  - `climate` entities for thermostat/climate zones
+  - `switch` entities for relay/on-off functions
   - `button` entities for cloud routines
+- Sends basic IPConnector `doaction` commands for supported light, cover, switch, and climate setpoint entities.
 - Adds services:
   - `vimar_view.refresh`
   - `vimar_view.execute_routine`
 
-## Known limitation
+## IPConnector
 
-Direct control of individual Vimar lights, relays, shutters, climate devices, and anti-intrusion functions uses the Android app's proprietary IPConnector WebSocket protocol:
+Individual Vimar lights, relays, shutters, curtains, and climate devices are discovered through the Android app's proprietary IPConnector WebSocket protocol:
 
 `wss://prod.vimar.cloud/wssmqtt/deviceproxy?duid=<DUID>&access_token=<ACCESS_TOKEN>`
 
-This build prepares the account/session/device model, but direct IPConnector action frames are not implemented yet. Routines are executable because the cloud REST endpoint is known.
+The integration attaches to each gateway, runs `ambientdiscovery`, `sfdiscovery`, and `getstatus`, then maps each system function to a Home Assistant platform where possible.
 
 ## Install
 

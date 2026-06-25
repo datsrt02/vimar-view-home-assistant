@@ -25,6 +25,7 @@ from .const import (
     MAX_DEVICE_FETCH_CONCURRENCY,
     OIDC_DISCOVERY_URL,
 )
+from .ipconnector import VimarIpConnector, VimarIpConnectorError, VimarIpGateway, make_source_uid
 from .models import JsonObject, VimarDataEntity, VimarDevice, VimarPlant, VimarRoutine, VimarSystemData
 
 _LOGGER = logging.getLogger(__name__)
@@ -297,6 +298,7 @@ class VimarViewApi:
         self.token = dict(token)
         self.discovery = discovery
         self._token_update_callback = token_update_callback
+        self._ip_gateways: dict[str, VimarIpGateway] = {}
 
     async def async_refresh_access_token(self) -> None:
         """Refresh the access token."""
@@ -340,15 +342,29 @@ class VimarViewApi:
         )
 
         devices = await self._fetch_devices(device_ids, plants)
+        ip_gateways = self._normalize_ip_gateways(associations, plants)
+        self._ip_gateways = {gateway.id: gateway for gateway in ip_gateways}
+        ipconnector_results = await self._fetch_ipconnector(ip_gateways)
+        ipconnector_raw: list[JsonObject] = []
+        for result in ipconnector_results:
+            plants.update(result.plants)
+            devices.update(result.devices)
+            ipconnector_raw.append(result.raw)
         routines = await self._fetch_routines(plants)
         entities = self._extract_entities(plants, devices)
+        for result in ipconnector_results:
+            entities.update(result.entities)
 
         return VimarSystemData(
             plants=plants,
             devices=devices,
             entities=entities,
             routines=routines,
-            raw={"associations": associations, "plants": raw_plants},
+            raw={
+                "associations": associations,
+                "plants": raw_plants,
+                "ipconnector": ipconnector_raw,
+            },
         )
 
     async def get_user_associations(self) -> Any:
@@ -378,6 +394,28 @@ class VimarViewApi:
             f"api/v1/plants/{plant_id}/routines/{routine_id}/execute",
             json_data={},
         )
+
+    async def async_execute_entity_action(
+        self,
+        entity: VimarDataEntity,
+        sfetype: str,
+        value: str,
+    ) -> None:
+        """Execute a simple IPConnector action for an entity."""
+        if self._token_expiring:
+            await self.async_refresh_access_token()
+        gateway_id = str(entity.features.get("gateway_id") or entity.raw.get("gateway_id") or "")
+        idsf = entity.features.get("idsf") or entity.raw.get("idsf")
+        if not gateway_id or idsf is None:
+            raise VimarViewApiError("Entity is missing Vimar gateway metadata")
+        gateway = self._ip_gateways.get(gateway_id)
+        if gateway is None:
+            raise VimarViewApiError("Vimar gateway credentials are not available yet")
+        client = self._ipconnector_client()
+        try:
+            await client.async_do_action(gateway, int(idsf), sfetype, value)
+        except (VimarIpConnectorError, ValueError) as err:
+            raise VimarViewApiError(str(err)) from err
 
     async def _request(
         self,
@@ -487,6 +525,64 @@ class VimarViewApi:
                     raw=item,
                 )
         return routines
+
+    async def _fetch_ipconnector(
+        self,
+        gateways: Iterable[VimarIpGateway],
+    ) -> list[Any]:
+        client = self._ipconnector_client()
+        results = []
+        for gateway in gateways:
+            if not gateway.password:
+                _LOGGER.debug("Skipping Vimar IPConnector gateway %s without password", gateway.id)
+                continue
+            try:
+                result = await client.async_discover_gateway(gateway)
+            except VimarIpConnectorError as err:
+                _LOGGER.debug("Vimar IPConnector discovery failed for %s: %s", gateway.id, err)
+                continue
+            results.append(result)
+        return results
+
+    def _ipconnector_client(self) -> VimarIpConnector:
+        claims = decode_jwt_claims(str(self.token.get("access_token") or ""))
+        user_key = _first_claim(claims, ("sub", "email", "preferred_username"))
+        return VimarIpConnector(
+            self.session,
+            str(self.token.get("access_token") or ""),
+            source_uid=make_source_uid(user_key),
+            username=_first_claim(claims, ("preferred_username", "email", "name")) or "",
+            useruid=_first_claim(claims, ("sub", "user_id", "uid", "userid")) or "",
+        )
+
+    def _normalize_ip_gateways(
+        self,
+        associations: Any,
+        plants: dict[str, VimarPlant],
+    ) -> list[VimarIpGateway]:
+        claims = decode_jwt_claims(str(self.token.get("access_token") or ""))
+        default_username = _first_claim(claims, ("preferred_username", "email", "name")) or ""
+        default_useruid = _first_claim(claims, ("sub", "user_id", "uid", "userid")) or ""
+        gateways: dict[str, VimarIpGateway] = {}
+        for item in _iter_items(associations):
+            duid = _first_string(item, ("duid", "deviceUid", "deviceuid", "deviceId", "id"))
+            if not duid:
+                continue
+            plant_id = _first_string(item, ("plantId", "plantuid", "puid", "uid"))
+            name = (
+                _first_string(item, ("displayname", "displayName", "deviceName", "plantName", "name"))
+                or (plants.get(plant_id or "") or VimarPlant(id=duid, name=duid)).name
+            )
+            gateways[duid] = VimarIpGateway(
+                id=duid,
+                name=name,
+                plant_id=plant_id,
+                password=_first_string(item, ("password", "pwd", "pass", "devicePassword")) or "",
+                username=_first_string(item, ("username", "email", "login")) or default_username,
+                useruid=_first_string(item, ("useruid", "userUid", "userid", "userId")) or default_useruid,
+                raw=item,
+            )
+        return list(gateways.values())
 
     def _normalize_plants(self, raw_plants: Any, associations: Any) -> dict[str, VimarPlant]:
         plants: dict[str, VimarPlant] = {}
@@ -736,6 +832,14 @@ def _extract_ids(value: Any, keys: tuple[str, ...]) -> set[str]:
 
 
 def _first_string(value: JsonObject, keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        item = value.get(key)
+        if item not in (None, ""):
+            return str(item)
+    return None
+
+
+def _first_claim(value: JsonObject, keys: tuple[str, ...]) -> str | None:
     for key in keys:
         item = value.get(key)
         if item not in (None, ""):

@@ -9,6 +9,10 @@ DOMAIN = "vimar_view"
 PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
+    Platform.LIGHT,
+    Platform.SWITCH,
+    Platform.COVER,
+    Platform.CLIMATE,
     Platform.BUTTON,
 ]
 
@@ -27,6 +31,7 @@ APP_LEGACY_REDIRECT_URI = "com.prova.app:/oauth2redirect/example-provide"
 APP_REDIRECT_URIS = (APP_REDIRECT_URI, APP_LEGACY_REDIRECT_URI)
 
 BASE_URL = "https://prod.vimar.cloud/"
+CLOUD_WSS_BASE_URL = "wss://prod.vimar.cloud"
 DYNAMIC_LINK_BASE_URL = "https://app.vimar.cloud/"
 IN_APP_PURCHASE_URL = "https://api.vimar.cloud/v1/"
 EXTERNAL_CLOUD_RESOURCE_URL = "https://static.vimar.cloud/appview/locales/"

@@ -42,6 +42,8 @@ class VimarDataEntity:
     device_id: str | None = None
     category: str | None = None
     path: str | None = None
+    enabled: bool | None = None
+    features: JsonObject = field(default_factory=dict)
     raw: JsonObject = field(default_factory=dict)
 
 
