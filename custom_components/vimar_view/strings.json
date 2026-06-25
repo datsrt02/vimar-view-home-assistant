@@ -4,9 +4,9 @@
     "step": {
       "user": {
         "title": "Link Vimar VIEW account",
-        "description": "Open this URL in a browser, sign in, then paste the final redirect URL here:\n\n{authorization_url}\n\nThe browser may show that the com.prova.app link cannot be opened. Copy that final URL from the address bar or browser error page.",
+        "description": "Open this URL in a desktop browser, sign in, then paste the final redirect URL or only the code value here:\n\n{authorization_url}\n\nAfter a successful login the browser may show a blank or unreachable com.prova.app page. That is expected: copy the address from the address bar if it contains code=...\n\nIf the page does not redirect after login, try this alternate Vimar redirect URL:\n\n{fallback_authorization_url}",
         "data": {
-          "callback_url": "Final redirect URL"
+          "callback_url": "Final redirect URL or code"
         }
       }
     },

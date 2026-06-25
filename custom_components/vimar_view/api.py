@@ -17,7 +17,7 @@ from aiohttp import ClientError, ClientResponse, ClientSession
 
 from .const import (
     APP_CLIENT_ID,
-    APP_REDIRECT_URI,
+    APP_REDIRECT_URIS,
     APP_SCOPE,
     APP_USER_AGENT,
     BASE_URL,
@@ -69,10 +69,22 @@ class VimarAuthSession:
     @property
     def authorization_url(self) -> str:
         """Return the URL the user must open."""
+        return self.authorization_url_for_redirect_uri(APP_REDIRECT_URIS[0])
+
+    @property
+    def authorization_urls(self) -> dict[str, str]:
+        """Return primary and fallback URLs the user can open."""
+        return {
+            redirect_uri: self.authorization_url_for_redirect_uri(redirect_uri)
+            for redirect_uri in APP_REDIRECT_URIS
+        }
+
+    def authorization_url_for_redirect_uri(self, redirect_uri: str) -> str:
+        """Return an authorization URL for a redirect URI."""
         authorization_endpoint = self.discovery["authorization_endpoint"]
         query = {
             "client_id": APP_CLIENT_ID,
-            "redirect_uri": APP_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": APP_SCOPE,
             "state": self.state,
@@ -84,7 +96,8 @@ class VimarAuthSession:
 
     async def exchange_callback_url(self, callback_url: str) -> JsonObject:
         """Exchange the pasted redirect URL for tokens."""
-        parsed = urlparse(callback_url.strip())
+        cleaned_callback = callback_url.strip()
+        parsed = urlparse(cleaned_callback)
         query = parse_qs(parsed.query)
         if not query and parsed.fragment:
             query = parse_qs(parsed.fragment)
@@ -93,18 +106,21 @@ class VimarAuthSession:
             description = _first(query.get("error_description")) or error
             raise VimarViewAuthError(description)
         code = _first(query.get("code"))
+        if not code and "=" not in cleaned_callback and "/" not in cleaned_callback:
+            code = cleaned_callback
         state = _first(query.get("state"))
         if not code:
             raise VimarViewAuthError("Redirect URL does not contain an authorization code")
-        if state != self.state:
+        if state is not None and state != self.state:
             raise VimarViewAuthError("OAuth state mismatch")
+        redirect_uri = _redirect_uri_from_callback(parsed) or APP_REDIRECT_URIS[0]
 
         token_endpoint = self.discovery["token_endpoint"]
         data = {
             "grant_type": "authorization_code",
             "client_id": APP_CLIENT_ID,
             "code": code,
-            "redirect_uri": APP_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "code_verifier": self.code_verifier,
         }
         token = await request_json(self.session, "POST", token_endpoint, data=data, auth=False)
@@ -475,6 +491,15 @@ def _join_url(base_url: str, path: str) -> str:
     if path.startswith("http://") or path.startswith("https://"):
         return path
     return urljoin(base_url, path.lstrip("/"))
+
+
+def _redirect_uri_from_callback(parsed) -> str | None:
+    if parsed.scheme != "com.prova.app":
+        return None
+    callback_uri = f"{parsed.scheme}:{parsed.path}"
+    if callback_uri in APP_REDIRECT_URIS:
+        return callback_uri
+    return None
 
 
 def _first(values: list[str] | None) -> str | None:

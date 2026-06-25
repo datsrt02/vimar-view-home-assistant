@@ -64,9 +64,17 @@ class VimarViewConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
         authorization_url = self._auth.authorization_url if self._auth else ""
+        fallback_authorization_url = ""
+        if self._auth is not None:
+            urls = list(self._auth.authorization_urls.values())
+            if len(urls) > 1:
+                fallback_authorization_url = urls[1]
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({vol.Required(CONF_CALLBACK_URL): str}),
-            description_placeholders={"authorization_url": authorization_url},
+            description_placeholders={
+                "authorization_url": authorization_url,
+                "fallback_authorization_url": fallback_authorization_url,
+            },
             errors=errors,
         )

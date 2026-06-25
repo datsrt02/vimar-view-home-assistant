@@ -22,7 +22,9 @@ DATA_COORDINATOR = "coordinator"
 
 APP_CLIENT_ID = "mobile-user-view2"
 APP_SCOPE = "openid"
-APP_REDIRECT_URI = "com.prova.app:/oauth2redirect/example-provide"
+APP_REDIRECT_URI = "com.prova.app:/oauth2redirect/example-provider"
+APP_LEGACY_REDIRECT_URI = "com.prova.app:/oauth2redirect/example-provide"
+APP_REDIRECT_URIS = (APP_REDIRECT_URI, APP_LEGACY_REDIRECT_URI)
 
 BASE_URL = "https://prod.vimar.cloud/"
 DYNAMIC_LINK_BASE_URL = "https://app.vimar.cloud/"
