@@ -1,0 +1,26 @@
+refresh:
+  name: Refresh
+  description: Refresh all Vimar VIEW data now.
+
+execute_routine:
+  name: Execute routine
+  description: Execute a Vimar VIEW routine by plant and routine id.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional Home Assistant config entry id. The first Vimar VIEW entry is used when omitted.
+      required: false
+      selector:
+        text: {}
+    plant_id:
+      name: Plant ID
+      description: Vimar plant id.
+      required: true
+      selector:
+        text: {}
+    routine_id:
+      name: Routine ID
+      description: Vimar routine id.
+      required: true
+      selector:
+        text: {}

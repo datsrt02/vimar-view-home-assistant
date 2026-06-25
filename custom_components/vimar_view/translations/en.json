@@ -1,0 +1,21 @@
+{
+  "title": "Vimar VIEW",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Link Vimar VIEW account",
+        "description": "Open this URL in a browser, sign in, then paste the final redirect URL here:\n\n{authorization_url}\n\nThe browser may show that the com.prova.app link cannot be opened. Copy that final URL from the address bar or browser error page.",
+        "data": {
+          "callback_url": "Final redirect URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to Vimar VIEW",
+      "invalid_auth": "Authentication failed"
+    },
+    "abort": {
+      "already_configured": "This Vimar VIEW account is already configured"
+    }
+  }
+}
