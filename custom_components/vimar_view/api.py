@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
-from aiohttp import ClientError, ClientResponse, ClientSession
+from aiohttp import ClientError, ClientResponse, ClientSession, FormData
 
 from .const import (
     APP_CLIENT_ID,
@@ -50,9 +50,10 @@ class _AuthNavigationResult:
 class _LoginForm:
     """HTML login form details."""
 
-    def __init__(self, action: str, inputs: dict[str, str]) -> None:
+    def __init__(self, action: str, inputs: dict[str, str], enctype: str | None = None) -> None:
         self.action = action
         self.inputs = inputs
+        self.enctype = enctype or ""
 
 
 class _LoginFormParser(HTMLParser):
@@ -69,10 +70,11 @@ class _LoginFormParser(HTMLParser):
             self._current_form = {
                 "id": attr_map.get("id", ""),
                 "action": attr_map.get("action", ""),
+                "enctype": attr_map.get("enctype", ""),
                 "inputs": {},
             }
             return
-        if tag.lower() != "input" or self._current_form is None:
+        if tag.lower() not in {"button", "input"} or self._current_form is None:
             return
         name = attr_map.get("name")
         if name:
@@ -217,10 +219,18 @@ class VimarAuthSession:
                 login_form = _extract_login_form(result.text)
                 form_action = urljoin(result.url, login_form.action)
                 form_data = dict(login_form.inputs)
-                form_data["username"] = username
-                form_data["password"] = password
+                if "email" in form_data or "passw" in form_data:
+                    form_data["email"] = username
+                    form_data["passw"] = password
+                else:
+                    form_data["username"] = username
+                    form_data["password"] = password
 
-                result = await self._request_without_redirects("POST", form_action, data=form_data)
+                result = await self._request_without_redirects(
+                    "POST",
+                    form_action,
+                    data=_build_form_payload(form_data, login_form.enctype),
+                )
                 if result.callback_url is None:
                     raise VimarViewAuthError("Vimar login did not return an authorization code")
                 return await self.exchange_callback_url(result.callback_url)
@@ -658,14 +668,29 @@ def _extract_login_form(html: str) -> _LoginForm:
         inputs = form.get("inputs") or {}
         form_id = str(form.get("id") or "")
         if form_id == "kc-form-login" or "login-actions/authenticate" in action:
-            return _LoginForm(action, dict(inputs))
+            return _LoginForm(action, dict(inputs), str(form.get("enctype") or ""))
+        if "email" in inputs and "passw" in inputs:
+            return _LoginForm(action, dict(inputs), str(form.get("enctype") or ""))
 
     for form in parser.forms:
         inputs = form.get("inputs") or {}
-        if "username" in inputs or "password" in inputs:
-            return _LoginForm(str(form.get("action") or ""), dict(inputs))
+        if "username" in inputs or "password" in inputs or "email" in inputs:
+            return _LoginForm(
+                str(form.get("action") or ""),
+                dict(inputs),
+                str(form.get("enctype") or ""),
+            )
 
     raise VimarViewAuthError("Could not find Vimar login form")
+
+
+def _build_form_payload(form_data: dict[str, str], enctype: str) -> Any:
+    if "multipart/form-data" not in enctype.lower():
+        return form_data
+    payload = FormData()
+    for key, value in form_data.items():
+        payload.add_field(key, value)
+    return payload
 
 
 def _first(values: list[str] | None) -> str | None:
